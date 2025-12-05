@@ -40,8 +40,8 @@ def run():
     logger.info("Parsing Train Data...")
     train_entries = parse_file_to_entries(cfg.train_file, char2idx, label2idx)
     
-    logger.info("Parsing Dev Data...")
-    dev_entries = parse_file_to_entries(cfg.dev_file, char2idx, label2idx)
+    logger.info("Parsing Val Data...")
+    val_entries = parse_file_to_entries(cfg.val_file, char2idx, label2idx)
 
     # Convert to HF Dataset format
     # Transformer expects text input, but for char-level alignment we usually feed 
@@ -54,7 +54,7 @@ def run():
         }
 
     train_ds = DiacritizationDataset.from_dict(format_for_hf(train_entries))
-    dev_ds = DiacritizationDataset.from_dict(format_for_hf(dev_entries))
+    val_ds = DiacritizationDataset.from_dict(format_for_hf(val_entries))
 
     # 3. Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(cfg.transformer_model_name, use_fast=True)
@@ -93,7 +93,7 @@ def run():
         return tokenized_inputs
 
     train_tokenized = train_ds.map(tokenize_and_align_labels, batched=True)
-    dev_tokenized = dev_ds.map(tokenize_and_align_labels, batched=True)
+    val_tokenized = val_ds.map(tokenize_and_align_labels, batched=True)
 
     # 5. Model
     model = AutoModelForTokenClassification.from_pretrained(
@@ -154,7 +154,7 @@ def run():
         model=model,
         args=training_args,
         train_dataset=train_tokenized,
-        eval_dataset=dev_tokenized,
+        eval_dataset=val_tokenized,
         tokenizer=tokenizer,
         data_collator=DataCollatorForTokenClassification(tokenizer),
         compute_metrics=compute_metrics

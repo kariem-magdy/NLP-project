@@ -1,16 +1,3 @@
-
----
-
-# Core code
-
-Below are the main source files. Copy them into the `src/` tree as indicated.
-
----
-
-### `src/config.py`
-```python
-# configuration variables and defaults
-
 import os
 from dataclasses import dataclass
 
@@ -19,7 +6,7 @@ class Config:
     # Data paths
     data_dir: str = os.path.join(os.path.dirname(__file__), '..', 'data')
     train_file: str = os.path.join(data_dir, 'train.txt')
-    dev_file: str = os.path.join(data_dir, 'dev.txt')
+    val_file: str = os.path.join(data_dir, 'val.txt')
     test_file: str = os.path.join(data_dir, 'test.txt')
 
     # Model & training

@@ -3,7 +3,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from typing import List, Dict
 
-def collate_fn(batch: List[Dict], pad_idx: int = 0, pad_label: int = -100):
+def collate_fn(batch: List[Dict], pad_idx: int = 0, pad_label: int = 0):
     """
     Pads sequences for training.
     pad_idx: padding for character IDs (usually 0)

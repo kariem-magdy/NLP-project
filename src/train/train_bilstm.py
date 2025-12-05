@@ -35,7 +35,7 @@ def train():
     # 2. Create Datasets
     # Pass dicts directly; logic is delegated to preprocess.parse_file_to_entries
     train_ds = DiacritizationDataset(cfg.train_file, char2idx, label2idx)
-    dev_ds = DiacritizationDataset(cfg.dev_file, char2idx, label2idx)
+    val_ds = DiacritizationDataset(cfg.val_file, char2idx, label2idx)
 
     # 3. DataLoaders
     # Using the updated collate_fn from src.data.collate
@@ -46,8 +46,8 @@ def train():
         collate_fn=collate_fn, 
         num_workers=2
     )
-    dev_loader = DataLoader(
-        dev_ds, 
+    val_loader = DataLoader(
+        val_ds, 
         batch_size=cfg.batch_size, 
         shuffle=False, 
         collate_fn=collate_fn, 
@@ -105,7 +105,7 @@ def train():
         all_refs = []  # List of list of strings
         
         with torch.no_grad():
-            for batch in dev_loader:
+            for batch in val_loader:
                 chars = batch['chars'].to(device)
                 mask = batch['mask'].to(device)
                 

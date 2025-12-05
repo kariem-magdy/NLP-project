@@ -10,3 +10,4 @@ regex
 pyarabic
 accelerate
 tensorboard
+regex

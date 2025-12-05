@@ -1,51 +1,57 @@
-from flask import Flask, request, render_template_string, jsonify
-import os
-from ..infer.infer import infer_single_sentence
-from ..config import cfg
-
-# Simple Flask app — loads the BiLSTM model checkpoint on start.
-MODEL_PATH = os.path.join(cfg.models_dir, 'best_bilstm_crf.pt')
+# src/app/app.py
+from flask import Flask, request, jsonify, render_template_string
+from ..infer.infer import DiacriticPredictor
 
 app = Flask(__name__)
 
-HTML = """
-<!doctype html>
-<title>Arabic Diacritizer Demo</title>
-<h1>Arabic Diacritizer (BiLSTM+CRF)</h1>
-<form action="/diacritize" method="post">
-  <textarea name="sentence" rows=4 cols=60 placeholder="Enter undiacritized Arabic sentence..."></textarea><br>
-  <input type="submit" value="Diacritize">
-</form>
-{% if result %}
-  <h2>Result</h2>
-  <div style="font-size:20px;">{{ result }}</div>
-{% endif %}
+# Initialize Predictor ONCE at startup
+print("Loading model...")
+predictor = DiacriticPredictor()
+print("Model loaded!")
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head><title>Arabic Diacritizer</title></head>
+<body>
+    <div style="max-width: 600px; margin: 50px auto; font-family: sans-serif;">
+        <h2>Arabic Text Diacritization</h2>
+        <textarea id="input_text" rows="4" style="width: 100%;" placeholder="أدخل النص العربي هنا..."></textarea>
+        <br><br>
+        <button onclick="diacritize()">Diacritize</button>
+        <h3>Result:</h3>
+        <p id="output_text" style="font-size: 1.2em; direction: rtl; border: 1px solid #ddd; padding: 10px; min-height: 50px;"></p>
+    </div>
+
+    <script>
+        async function diacritize() {
+            const text = document.getElementById('input_text').value;
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: text})
+            });
+            const data = await response.json();
+            document.getElementById('output_text').textContent = data.diacritized;
+        }
+    </script>
+</body>
+</html>
 """
 
-@app.route("/", methods=["GET"])
-def index():
-    return render_template_string(HTML)
+@app.route('/')
+def home():
+    return render_template_string(HTML_TEMPLATE)
 
-@app.route("/diacritize", methods=["POST"])
-def diacritize():
-    sentence = request.form.get("sentence", "").strip()
-    if not sentence:
-        return render_template_string(HTML, result="Please provide a sentence.")
-    try:
-        out = infer_single_sentence(sentence, MODEL_PATH)
-    except Exception as e:
-        return render_template_string(HTML, result=f"Error: {e}")
-    return render_template_string(HTML, result=out)
-
-@app.route("/api/diacritize", methods=["POST"])
-def api_diacritize():
+@app.route('/predict', methods=['POST'])
+def predict():
     data = request.json
-    sentence = data.get("sentence", "")
-    out = infer_single_sentence(sentence, MODEL_PATH)
-    return jsonify({"diacritized": out})
+    text = data.get('text', '')
+    if not text:
+        return jsonify({'diacritized': ''})
+    
+    result = predictor.predict(text)
+    return jsonify({'diacritized': result})
 
-if __name__ == "__main__":
-    # Ensure model exists
-    if not os.path.exists(MODEL_PATH):
-        print("Model not found at", MODEL_PATH)
-    app.run(host="0.0.0.0", port=5000, debug=False)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
