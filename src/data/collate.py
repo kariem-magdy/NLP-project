@@ -1,21 +1,31 @@
-# collate functions for DataLoader
+# src/data/collate.py
 import torch
-from typing import List
+from torch.nn.utils.rnn import pad_sequence
+from typing import List, Dict
 
-def collate_chars(batch: List[dict], pad_value: int = 0):
-    # pad chars and labels to max length in batch
-    max_len = max(x['chars'].size(0) for x in batch)
-    batch_size = len(batch)
-    chars = torch.full((batch_size, max_len), pad_value, dtype=torch.long)
-    labels = torch.full((batch_size, max_len), -100, dtype=torch.long)  # -100 for ignore index
-    masks = torch.zeros((batch_size, max_len), dtype=torch.bool)
-    raws = []
-    label_strs = []
-    for i, item in enumerate(batch):
-        l = item['chars'].size(0)
-        chars[i, :l] = item['chars']
-        labels[i, :l] = item['labels']
-        masks[i, :l] = 1
-        raws.append(item['raw'])
-        label_strs.append(item['label_strs'])
-    return {'chars': chars, 'labels': labels, 'mask': masks, 'raws': raws, 'label_strs': label_strs}
+def collate_fn(batch: List[Dict], pad_idx: int = 0, pad_label: int = -100):
+    """
+    Pads sequences for training.
+    pad_idx: padding for character IDs (usually 0)
+    pad_label: padding for labels (usually -100 to ignore in CrossEntropy)
+    """
+    # Extract
+    chars = [item["chars"] for item in batch]
+    labels = [item["labels"] for item in batch]
+    raws = [item["raw"] for item in batch]
+    label_strs = [item["label_strs"] for item in batch]
+
+    # Pad
+    chars_padded = pad_sequence(chars, batch_first=True, padding_value=pad_idx)
+    labels_padded = pad_sequence(labels, batch_first=True, padding_value=pad_label)
+    
+    # Create Mask (1 for real token, 0 for pad)
+    mask = (chars_padded != pad_idx)
+
+    return {
+        "chars": chars_padded,
+        "labels": labels_padded,
+        "mask": mask,
+        "raws": raws,
+        "label_strs": label_strs
+    }
