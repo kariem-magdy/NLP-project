@@ -1,85 +1,111 @@
 # src/infer/infer.py
 import torch
 import os
-import unicodedata
-from ..models.bilstm_crf import BiLSTMCRF
-from ..preprocess import clean_line, normalize_text, load_json, pad_sequence
+import sys
 from ..config import cfg
+from ..preprocess import load_json, extract_labels
+from ..models.bilstm_crf import BiLSTMCRF
+from ..features import feature_mgr
 
 class DiacriticPredictor:
-    def __init__(self, model_path=None, vocab_dir=None):
-        self.device = torch.device(cfg.device)
+    def __init__(self):
+        print(f"[INFO] Loading resources on {cfg.device}...")
+        self.device = cfg.device
         
-        # 1. Resolve Paths
-        if vocab_dir is None:
-            vocab_dir = os.path.join(cfg.outputs_dir, "processed")
-        if model_path is None:
-            model_path = os.path.join(cfg.models_dir, "best_bilstm.pt")
+        # 1. Load Vocabs
+        try:
+            self.char2idx = load_json(os.path.join(cfg.processed_dir, "char2idx.json"))
+            self.label2idx = load_json(os.path.join(cfg.processed_dir, "label2idx.json"))
+            self.idx2label = {v: k for k, v in self.label2idx.items()}
+        except FileNotFoundError:
+            raise RuntimeError("Vocab files not found. Run build_vocab.py first.")
 
-        # 2. Load Vocabs
-        self.char2idx = load_json(os.path.join(vocab_dir, "char2idx.json"))
-        self.label2idx = load_json(os.path.join(vocab_dir, "label2idx.json"))
-        self.idx2label = {v: k for k, v in self.label2idx.items()}
-        self.idx2char = {v: k for k, v in self.char2idx.items()}
+        # 2. Load Word Vocab (if needed)
+        self.word2idx = None
+        if cfg.use_word_emb or cfg.use_fasttext:
+            try:
+                self.word2idx = load_json(os.path.join(cfg.processed_dir, "word2idx.json"))
+            except:
+                print("[WARN] Word vocab not found. Feature disabled.")
 
-        # 3. Load Model
-        checkpoint = torch.load(model_path, map_location=self.device)
-        
-        # Handle cases where checkpoint might be full dict or just state_dict
-        if 'model_state' in checkpoint:
-            state_dict = checkpoint['model_state']
-        else:
-            state_dict = checkpoint
+        # 3. Load Feature Manager
+        feature_mgr.load()
 
+        # 4. Initialize Model
+        # We pass None for fasttext_matrix because we load state_dict immediately after
         self.model = BiLSTMCRF(
-            vocab_size=len(self.char2idx),
-            char_emb_dim=cfg.char_emb_dim,
-            lstm_hidden=cfg.lstm_hidden,
-            num_labels=len(self.label2idx),
-            num_layers=cfg.lstm_layers,
-            dropout=cfg.bilstm_dropout,
+            vocab_size=len(self.char2idx), 
+            char_emb_dim=cfg.char_emb_dim, 
+            lstm_hidden=cfg.lstm_hidden, 
+            num_labels=len(self.label2idx), 
+            word_vocab_size=len(self.word2idx) if self.word2idx else None,
+            fasttext_matrix=None, 
+            num_layers=cfg.lstm_layers, 
+            dropout=0.0, # No dropout during inference
             pad_idx=0
-        )
-        self.model.load_state_dict(state_dict)
-        self.model.to(self.device)
+        ).to(self.device)
+        
+        # 5. Load Weights
+        ckpt_path = os.path.join(cfg.models_dir, 'best_bilstm.pt')
+        if not os.path.exists(ckpt_path):
+            raise RuntimeError(f"Checkpoint not found at {ckpt_path}")
+            
+        checkpoint = torch.load(ckpt_path, map_location=self.device)
+        if 'model_state' in checkpoint:
+            self.model.load_state_dict(checkpoint['model_state'])
+        else:
+            self.model.load_state_dict(checkpoint)
+            
+        # 6. CRITICAL: Set Eval Mode
         self.model.eval()
-
-    def preprocess_text(self, text):
-        # Clean & Normalize (Must match training logic!)
-        text = clean_line(text)
-        text = normalize_text(text, {
-            "normalize_hamza": True, 
-            "remove_tatweel": True, 
-            "lower_latin": True, 
-            "remove_punctuation": True # Caution: Verify if you want punct removed in final output
-        })
-        return text
+        print("[INFO] Model loaded and set to eval mode.")
 
     def predict(self, text):
         """
-        Diacritizes a raw input string.
+        Diacritizes a single input string.
         """
+        self.model.eval() # Redundant safety check
+        
         # 1. Preprocess
-        clean_text = self.preprocess_text(text)
-        if not clean_text:
-            return ""
+        text_clean, _ = extract_labels(text)
+        if not text_clean: return ""
 
-        # 2. Vectorize
-        char_ids = [self.char2idx.get(c, self.char2idx["<UNK>"]) for c in clean_text]
-        input_tensor = torch.tensor([char_ids], dtype=torch.long).to(self.device)
-        mask = torch.ones_like(input_tensor, dtype=torch.bool).to(self.device)
+        # 2. Prepare Inputs
+        chars = torch.tensor([self.char2idx.get(c, 1) for c in text_clean], dtype=torch.long).unsqueeze(0).to(self.device)
+        
+        word_ids = None
+        if self.word2idx:
+            w_ids = []
+            words = text_clean.split()
+            ptr = 0
+            for c in text_clean:
+                if c == ' ': 
+                    w_ids.append(0)
+                    ptr += 1
+                elif ptr < len(words):
+                    w_ids.append(self.word2idx.get(words[ptr], 1))
+                else:
+                    w_ids.append(0)
+            word_ids = torch.tensor(w_ids, dtype=torch.long).unsqueeze(0).to(self.device)
 
-        # 3. Inference
+        bow = feature_mgr.transform_bow(text_clean).unsqueeze(0).to(self.device) if cfg.use_bow else None
+        tfidf = feature_mgr.transform_tfidf(text_clean).unsqueeze(0).to(self.device) if cfg.use_tfidf else None
+        
+        # Mask (All 1s for inference)
+        mask = torch.ones_like(chars, dtype=torch.bool)
+
+        # 3. Forward
         with torch.no_grad():
-            # Model returns list of lists of label indices
-            pred_ids = self.model(input_tensor, mask=mask)[0]
+            pred_ids = self.model(chars, word_ids, bow, tfidf, mask=mask)[0]
 
-        # 4. Decode & Merge
-        output_chars = []
-        for char, p_id in zip(clean_text, pred_ids):
-            diacritic = self.idx2label.get(p_id, "_")
-            output_chars.append(char)
-            if diacritic != "_":
-                output_chars.append(diacritic)
+        # 4. Decode
+        out = ""
+        for char, pid in zip(text_clean, pred_ids):
+            diacritic = self.idx2label.get(pid, '_')
+            out += char + (diacritic if diacritic != '_' else '')
+            
+        return out
 
-        return "".join(output_chars)
+if __name__ == "__main__":
+    pred = DiacriticPredictor()
+    print(pred.predict("ذهب الطالب الى المدرسة"))

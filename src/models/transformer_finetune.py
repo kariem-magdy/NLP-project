@@ -1,7 +1,6 @@
-# wrapper to fine-tune a transformer for token classification (we'll align characters to tokens)
+# src/models/transformer_finetune.py
 import torch
-from transformers import AutoTokenizer, AutoModelForTokenClassification, TrainingArguments, Trainer
-import numpy as np
+from transformers import AutoTokenizer, AutoModelForTokenClassification
 
 class TransformerTokenClassifier:
     def __init__(self, model_name, label_list, device):
@@ -19,15 +18,19 @@ class TransformerTokenClassifier:
     def load(self, path: str):
         self.tokenizer = AutoTokenizer.from_pretrained(path, use_fast=True)
         self.model = AutoModelForTokenClassification.from_pretrained(path).to(self.device)
+        self.model.eval() # Ensure eval mode after loading
 
     def predict_on_sentences(self, sentences: list):
         # sentences: list of strings (no diacritics)
         enc = self.tokenizer(sentences, return_tensors='pt', padding=True, truncation=True, is_split_into_words=False)
         input_ids = enc['input_ids'].to(self.device)
         attention_mask = enc['attention_mask'].to(self.device)
+        
+        self.model.eval() # <--- CRITICAL FIX: Disable dropout
+        
         with torch.no_grad():
             outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
             logits = outputs.logits  # (batch, seq_len, num_labels)
             preds = torch.argmax(logits, dim=-1).cpu().numpy()
-        # Map token-level predictions to characters is dataset-specific; here we return token predictions
+            
         return preds, enc
