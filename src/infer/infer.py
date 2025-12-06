@@ -108,4 +108,4 @@ class DiacriticPredictor:
 
 if __name__ == "__main__":
     pred = DiacriticPredictor()
-    print(pred.predict("ذهب الطالب الى المدرسة"))
+    print(pred.predict("ذهب علي الي الشاطئ"))  # Example usage

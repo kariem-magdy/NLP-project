@@ -1,64 +1,161 @@
-# src/config.py
+# src/train/train_bilstm.py
 import os
-from dataclasses import dataclass
+import torch
+import logging
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+from ..config import cfg
+from ..preprocess import load_json
+from ..data.dataset import DiacritizationDataset
+from ..data.collate import collate_fn
+from ..models.bilstm_crf import BiLSTMCRF
+from ..utils.checkpoints import save_checkpoint
+from ..features import feature_mgr
+from ..eval.metrics import DERCalculator
 
-@dataclass
-class Config:
-    # --- Paths (Your Original Paths) ---
-    data_dir: str = os.path.join(os.path.dirname(__file__), '..', 'data')
-    train_file: str = os.path.join(data_dir, 'train.txt')
-    val_file: str = os.path.join(data_dir, 'val.txt')
-    test_file: str = os.path.join(data_dir, 'test.txt')
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("Train")
 
-    # --- Output Paths ---
-    outputs_dir: str = os.path.join(os.path.dirname(__file__), '..', 'outputs')
-    models_dir: str = os.path.join(outputs_dir, 'models')
-    logs_dir: str = os.path.join(outputs_dir, 'logs')
-    processed_dir: str = os.path.join(outputs_dir, 'processed')
-
-    # --- System ---
-    device = "cuda" if (os.environ.get("CUDA_VISIBLE_DEVICES", "") != "" or 
-                       (hasattr(__import__('torch'), 'cuda') and __import__('torch').cuda.is_available())) else "cpu"
-
-    # --- Model Defaults (BiLSTM) ---
-    char_vocab_min_freq: int = 1
-    char_emb_dim: int = 128
-    lstm_hidden: int = 256
-    lstm_layers: int = 2
-    bilstm_dropout: float = 0.3
+def train():
+    os.makedirs(cfg.models_dir, exist_ok=True)
     
-    # --- Training Defaults ---
-    batch_size: int = 32
-    epochs: int = 10
-    lr: float = 1e-3
+    # 1. Load Vocabs
+    try:
+        char2idx = load_json(os.path.join(cfg.processed_dir, "char2idx.json"))
+        label2idx = load_json(os.path.join(cfg.processed_dir, "label2idx.json"))
+        # Create inverse mapping for evaluation
+        idx2label = {v: k for k, v in label2idx.items()}
+    except: 
+        raise FileNotFoundError(f"Vocab files not found in {cfg.processed_dir}. Run build_vocab.py first.")
+    
+    # 2. Load Word Vocab & FastText (if enabled)
+    word2idx, ft_matrix = None, None
+    if cfg.use_word_emb or cfg.use_fasttext:
+        try:
+            word2idx = load_json(os.path.join(cfg.processed_dir, "word2idx.json"))
+            if cfg.use_fasttext: 
+                ft_matrix = feature_mgr.load_fasttext_matrix(word2idx)
+        except: 
+            logger.warning("word2idx.json missing. Word features will be disabled.")
 
-    # --- Transformer Defaults (Preserved) ---
-    transformer_model_name: str = "aubmindlab/bert-base-arabertv02"
-    transformer_batch_size: int = 8
-    transformer_lr: float = 3e-5
-    transformer_epochs: int = 4
+    # 3. Create Datasets
+    logger.info(f"Loading Training Data: {cfg.train_file}")
+    train_ds = DiacritizationDataset(cfg.train_file, char2idx, label2idx, word2idx)
+    logger.info(f"Loading Validation Data: {cfg.val_file}")
+    val_ds = DiacritizationDataset(cfg.val_file, char2idx, label2idx, word2idx)
+    
+    train_loader = DataLoader(train_ds, cfg.batch_size, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_ds, cfg.batch_size, collate_fn=collate_fn)
 
-    # ====================================================
-    # NEW FEATURE FLAGS
-    # ====================================================
+    # 4. Initialize Model
+    model = BiLSTMCRF(
+        vocab_size=len(char2idx), 
+        char_emb_dim=cfg.char_emb_dim, 
+        lstm_hidden=cfg.lstm_hidden, 
+        num_labels=len(label2idx), 
+        word_vocab_size=len(word2idx) if word2idx else None,
+        fasttext_matrix=ft_matrix,
+        num_layers=cfg.lstm_layers, 
+        dropout=cfg.bilstm_dropout,
+        pad_idx=0
+    ).to(cfg.device)
     
-    # 1. Trainable Word Embeddings
-    use_word_emb: bool = True
-    word_emb_dim: int = 64
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    best_der = 100.0
+    der_calc = DERCalculator()
     
-    # 2. FastText Pre-trained Embeddings
-    use_fasttext: bool = False
-    fasttext_path: str = os.path.join(data_dir, "fasttext_wiki.ar.vec")
-    fasttext_dim: int = 300
+    logger.info("Starting training...")
     
-    # 3. Bag of Words (BoW)
-    use_bow: bool = True
-    bow_vocab_size: int = 2000
-    bow_emb_dim: int = 32
-    
-    # 4. TF-IDF
-    use_tfidf: bool = True
-    tfidf_vocab_size: int = 2000
-    tfidf_emb_dim: int = 32
+    for epoch in range(cfg.epochs):
+        model.train()
+        total_loss = 0.0
+        
+        # Training Step
+        for b in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
+            chars = b['chars'].to(cfg.device)
+            labels = b['labels'].to(cfg.device)
+            mask = b['mask'].to(cfg.device)
+            
+            word_ids = b['word_ids'].to(cfg.device) if b['word_ids'] is not None else None
+            bow = b['bow'].to(cfg.device) if b['bow'] is not None else None
+            tfidf = b['tfidf'].to(cfg.device) if b['tfidf'] is not None else None
+            
+            optimizer.zero_grad()
+            
+            # Forward pass
+            loss = model(chars, word_ids, bow, tfidf, mask, labels)
+            
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+        # Evaluation Step
+        model.eval()
+        
+        all_preds = []
+        all_refs = []
+        
+        # Flag to print only the first batch of the epoch for debugging
+        debug_printed = False 
+        
+        with torch.no_grad():
+            for b in val_loader:
+                chars = b['chars'].to(cfg.device)
+                mask = b['mask'].to(cfg.device)
+                
+                word_ids = b['word_ids'].to(cfg.device) if b['word_ids'] is not None else None
+                bow = b['bow'].to(cfg.device) if b['bow'] is not None else None
+                tfidf = b['tfidf'].to(cfg.device) if b['tfidf'] is not None else None
+                
+                # Predict
+                preds = model(chars, word_ids, bow, tfidf, mask=mask)
+                
+                # Process batch
+                for i, p in enumerate(preds):
+                    valid_len = int(mask[i].sum().item())
+                    
+                    # 1. Slice to valid length (Remove Padding)
+                    p_valid = p[:valid_len]
+                    
+                    # 2. Convert indices to strings
+                    p_labels = [idx2label.get(x, '') for x in p_valid]
+                    
+                    # 3. Get References (already strings)
+                    r_labels = b['label_strs'][i]
+                    raw = b['raws'][i]
+                    
+                    # --- DEBUG PRINT START ---
+                    if not debug_printed:
+                        logger.info("\n" + "="*40)
+                        logger.info(f"DEBUG SAMPLE (Epoch {epoch+1})")
+                        logger.info(f"Raw Text: {raw[:50]}...")
+                        logger.info(f"True Labels (First 10): {r_labels[:10]}")
+                        logger.info(f"Pred Labels (First 10): {p_labels[:10]}")
+                        logger.info(f"Lengths -> Raw: {len(raw)}, Ref: {len(r_labels)}, Pred: {len(p_labels)}")
+                        logger.info("="*40 + "\n")
+                        debug_printed = True
+                    # --- DEBUG PRINT END ---
 
-cfg = Config()
+                    all_preds.append((raw, p_labels))
+                    all_refs.append((raw, r_labels))
+
+        # Metrics
+        der = der_calc.compute(all_refs, all_preds) * 100
+        avg_loss = total_loss / len(train_loader)
+        
+        logger.info(f"Epoch {epoch+1}: Loss={avg_loss:.4f}, DER={der:.2f}%")
+        
+        # Save Best Model
+        if der < best_der:
+            best_der = der
+            save_checkpoint({
+                'epoch': epoch, 
+                'model_state': model.state_dict(), 
+                'best_der': best_der,
+                'char2idx': char2idx, 
+                'label2idx': label2idx
+            }, os.path.join(cfg.models_dir, 'best_bilstm.pt'))
+
+if __name__ == "__main__":
+    train()

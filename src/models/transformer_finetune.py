@@ -1,14 +1,9 @@
 # src/models/transformer_finetune.py
 import torch
 from transformers import AutoTokenizer, AutoModelForTokenClassification
-from typing import List, Tuple, Any
 
 class TransformerTokenClassifier:
-    """
-    Simple thin wrapper to use HF AutoModelForTokenClassification for inference & saving/loading.
-    Training is done with Trainer in train_transformer.py
-    """
-    def __init__(self, model_name: str, label_list: List[str], device: str = "cpu"):
+    def __init__(self, model_name, label_list, device):
         self.model_name = model_name
         self.label_list = label_list
         self.num_labels = len(label_list)
@@ -23,20 +18,19 @@ class TransformerTokenClassifier:
     def load(self, path: str):
         self.tokenizer = AutoTokenizer.from_pretrained(path, use_fast=True)
         self.model = AutoModelForTokenClassification.from_pretrained(path).to(self.device)
-        self.model.eval()
+        self.model.eval() # Ensure eval mode after loading
 
-    def predict_on_sentences(self, sentences: List[str]) -> Tuple[List[List[int]], Any]:
-        """
-        Returns (predictions, encoding) where predictions is list-of-list label ids (padded).
-        The consumer must map ids -> labels using label_list.
-        """
+    def predict_on_sentences(self, sentences: list):
+        # sentences: list of strings (no diacritics)
         enc = self.tokenizer(sentences, return_tensors='pt', padding=True, truncation=True, is_split_into_words=False)
         input_ids = enc['input_ids'].to(self.device)
         attention_mask = enc['attention_mask'].to(self.device)
-
-        self.model.eval()
+        
+        self.model.eval() # <--- CRITICAL FIX: Disable dropout
+        
         with torch.no_grad():
             outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-            logits = outputs.logits  # (B, L, C)
-            preds = logits.argmax(dim=-1).cpu().tolist()
+            logits = outputs.logits  # (batch, seq_len, num_labels)
+            preds = torch.argmax(logits, dim=-1).cpu().numpy()
+            
         return preds, enc
