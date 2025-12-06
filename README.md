@@ -1,10 +1,3 @@
-Here is a professional **README.md** file tailored to your project. It focuses on local installation and usage, omitting Docker as requested.
-
-You can copy the content below directly into your `README.md` file.
-
------
-
-````markdown
 # Arabic Text Diacritization System
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
@@ -14,157 +7,161 @@ You can copy the content below directly into your `README.md` file.
 
 A comprehensive Natural Language Processing (NLP) pipeline for automatic Arabic diacritization. This project implements two state-of-the-art approaches: a feature-rich **BiLSTM-CRF** baseline and a fine-tuned **Transformer (AraBERT)** model. It is designed for high performance, modularity, and ease of deployment.
 
+---
+
 ## 🚀 Key Features
 
 ### 1. Advanced BiLSTM-CRF Architecture
-A robust sequence labeling model incorporating multiple linguistic features to capture both morphological and semantic context:
-* **Character Embeddings:** Dense vector representations for individual Arabic characters.
-* **Word Embeddings:** Trainable embeddings aligned with character sequences.
-* **FastText Integration:** Support for pre-trained `wiki.ar.vec` embeddings to handle out-of-vocabulary words.
-* **Syntactic Features:** Sentence-level context capture using **Bag-of-Words (BoW)** and **TF-IDF** vectors projected into the sequence space.
-* **CRF Layer:** Conditional Random Field output layer to model valid diacritic transitions and dependencies.
+A robust sequence labeling model incorporating multiple linguistic features:
+- **Character Embeddings**
+- **Word Embeddings**
+- **FastText Embeddings** (optional)
+- **Bag-of-Words (BoW)** sentence features
+- **TF-IDF** sentence features
+- **CRF Layer** for modeling diacritic transitions
 
 ### 2. Transformer Fine-Tuning
-* Direct fine-tuning of **AraBERT** (or other BERT-based models) for token classification.
-* Handles sub-token alignment automatically.
-* Optimized training loop using Hugging Face's `Trainer` API.
+- Fine-tunes **AraBERT** or similar models for token classification  
+- Automatic subword alignment  
+- Uses HuggingFace `Trainer` API  
 
 ### 3. Production Ready
-* **Flask API:** A lightweight web interface for real-time demonstration.
-* **Configurable:** Centralized configuration for easy hyperparameter tuning.
-* **Inference Engine:** optimized script for processing raw text.
+- **Flask API** for real-time web demo  
+- **Config-driven design**  
+- **Clean inference pipeline**
 
 ---
 
 ## 📂 Project Structure
 
 ```text
-├── build_vocab.py           # Preprocessing script to generate vocabularies & feature vectorizers
+├── build_vocab.py           # Build vocabularies & feature vectorizers
 ├── requirements.txt         # Python dependencies
-├── setup.sh                 # Environment setup script (Linux/Git Bash)
-├── data/                    # Dataset directory
-│   ├── train.txt            # Training data (UTF-8 text)
-│   ├── val.txt              # Validation data
-│   └── fasttext_wiki.ar.vec # (Optional) Pre-trained FastText vectors
-├── outputs/                 # Artifacts directory
-│   ├── models/              # Saved model checkpoints (.pt)
-│   ├── logs/                # Training logs
-│   └── processed/           # Vocabularies (.json) and feature pickles (.pkl)
-├── scripts/                 # Execution shell scripts
-└── src/                     # Source code
-    ├── app/                 # Flask web application
-    ├── config.py            # Central configuration (Paths, Hyperparams, Flags)
-    ├── features.py          # Feature extraction logic (BoW, TF-IDF, FastText)
-    ├── preprocess.py        # Text cleaning, normalization, and label extraction
-    ├── data/                # Dataset loading and batch collation
-    ├── models/              # Model architectures (BiLSTM-CRF, Transformer)
-    ├── train/               # Training loops
-    ├── infer/               # Inference engine
-    └── eval/                # Evaluation metrics (DER)
-````
+├── setup.sh                 # Optional setup script
+├── data/
+│   ├── train.txt
+│   ├── val.txt
+│   └── fasttext_wiki.ar.vec # Optional FastText vectors
+├── outputs/
+│   ├── models/              # Model checkpoints
+│   ├── logs/
+│   └── processed/           # vocab + feature vectorizers
+└── src/
+    ├── app/                 # Flask application
+    ├── config.py            # Hyperparameters & flags
+    ├── features.py          # BoW, TF-IDF, FastText feature logic
+    ├── preprocess.py        # Normalization & label extraction
+    ├── data/                # Dataset + collate function
+    ├── models/              # BiLSTM-CRF & Transformer models
+    ├── train/               # Training scripts
+    ├── infer/               # Inference scripts
+    └── eval/                # DER evaluation
+```
 
------
+---
 
 ## 🛠️ Installation
 
-### 1\. Prerequisites
+### 1. Prerequisites
+- Python 3.8+
+- (Optional but recommended) CUDA-compatible GPU
 
-  * Python 3.8+
-  * CUDA-compatible GPU (Recommended)
-
-### 2\. Setup
-
-Clone the repository and install dependencies:
+### 2. Setup
 
 ```bash
-git clone [https://github.com/kariem-magdy/NLP-project.git](https://github.com/kariem-magdy/NLP-project.git)
+git clone https://github.com/kariem-magdy/NLP-project.git
 cd "NLP project"
 pip install -r requirements.txt
 ```
 
-*(Note: If you are on Windows/Linux, you may need to install `ffmpeg` and `libsndfile1` if any audio libraries are triggered, though this project focuses on text).*
-
------
+---
 
 ## 📊 Data Preparation
 
-Before training, you must process the raw text files to generate vocabulary mappings (`char2idx`, `label2idx`) and train the feature vectorizers (BoW, TF-IDF).
+Before training, generate vocabularies and feature vectorizers.
 
-1.  Ensure your data files (`train.txt`, `val.txt`) are in the `data/` directory.
-2.  (Optional) Download `wiki.ar.vec` from [FastText](https://fasttext.cc/docs/en/pretrained-vectors.html) and place it in `data/` as `fasttext_wiki.ar.vec` for enhanced performance.
-3.  Run the build script:
+1. Ensure `train.txt` and `val.txt` are inside the **data/** folder  
+2. (Optional) Download FastText vectors and rename to:
 
-<!-- end list -->
+```
+data/fasttext_wiki.ar.vec
+```
+
+3. Run:
 
 ```bash
 python build_vocab.py
 ```
 
-*This will generate all necessary artifacts in `outputs/processed/`.*
+Artifacts will be saved to:  
+`outputs/processed/`
 
------
+---
 
 ## 🧠 Usage
 
-### Training
-
-You can toggle features and adjust hyperparameters (e.g., `batch_size`, `use_fasttext`, `use_bow`) in `src/config.py`.
-
-**To train the BiLSTM-CRF model:**
+### 🔹 Train BiLSTM-CRF Model
 
 ```bash
 python -m src.train.train_bilstm
 ```
 
-  * **Checkpoint:** Saved to `outputs/models/best_bilstm.pt`
-  * **Metric:** Monitors Diacritic Error Rate (DER).
+Output:
+- `outputs/models/best_bilstm.pt`
+- DER logged to console/logs
 
-**To train the Transformer model:**
+---
+
+### 🔹 Train Transformer (AraBERT)
 
 ```bash
 python -m src.train.train_transformer
 ```
 
-### Inference (CLI)
+---
 
-To diacritize a single sentence or verify the model:
+### 🔹 Inference (CLI)
 
 ```bash
 python -m src.infer.infer
 ```
 
-*You can modify the test sentence inside `src/infer/infer.py`.*
+Modify the test sentence inside `src/infer/infer.py`.
 
-### Web Demo (Flask)
+---
 
-Launch the Flask application to test the model via a browser:
+### 🔹 Web Demo (Flask)
 
 ```bash
 python -m src.app.app
 ```
 
-Access the demo at `http://localhost:5000`.
+Visit:
 
------
+```
+http://localhost:5000
+```
 
-## 📉 Evaluation
+---
 
-The system evaluates performance using the **Diacritic Error Rate (DER)**, which calculates the percentage of incorrectly predicted diacritics relative to the total number of diacritized characters (excluding padding).
+## 📉 Evaluation Metric
 
-$$\text{DER} = \left( \frac{\text{Incorrect Predictions}}{\text{Total Valid Characters}} \right) \times 100 \%$$
+The system uses **Diacritic Error Rate (DER)**:
 
------
+```
+DER = (Incorrect Predictions / Total Valid Characters) × 100%
+```
+
+---
 
 ## ⚙️ Configuration (`src/config.py`)
 
-You can control the entire pipeline by editing `src/config.py`. Key flags include:
-
 ```python
 # Feature Flags
-use_word_emb = True       # Enable trainable word embeddings
-use_fasttext = False      # Enable pre-trained FastText (requires .vec file)
-use_bow = True            # Enable Bag of Words features
-use_tfidf = True          # Enable TF-IDF features
+use_word_emb = True
+use_fasttext = False
+use_bow = True
+use_tfidf = True
 
 # Hyperparameters
 char_emb_dim = 128
@@ -174,11 +171,8 @@ epochs = 20
 lr = 1e-3
 ```
 
------
+---
 
 ## 📜 License
 
-This project is licensed under the MIT License.
-
-```
-```
+This project is licensed under the **MIT License**.
